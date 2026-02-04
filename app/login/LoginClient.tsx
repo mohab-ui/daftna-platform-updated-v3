@@ -70,7 +70,7 @@ export default function LoginPage() {
           </div>
 
           <h1 className="authTitle">تسجيل الدخول</h1>
-          <p className="authHint">منصة هادئة ومنظمة لمحتوى الدفعة + بنك أسئلة MCQ.</p>
+          <p className="authHint">منصة شامله لمحتوى الدفعة + بنوك أسئلة MCQ.</p>
 
           {msg ? <p className="success">{msg}</p> : null}
           {err ? <p className="error">{err}</p> : null}
@@ -113,7 +113,7 @@ export default function LoginPage() {
           <div className="divider" />
 
           <p className="muted" style={{ marginTop: 0 }}>
-            لو ده أول مرة ليك هنا، اعمل{" "}
+            لو دي أول مرة ليك هنا، اعمل{" "}
             <Link href="/signup" style={{ textDecoration: "underline" }}>
               حساب جديد
             </Link>
