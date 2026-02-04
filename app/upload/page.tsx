@@ -352,7 +352,7 @@ export default function UploadPage() {
         </div>
 
         <p className="muted" style={{ marginTop: 12 }}>
-          تنبيه: ما ترفعش كتب محمية بحقوق نشر من غير إذن. الأفضل تستخدم OER أو ملفات مسموح مشاركتها.
+          تنبيه: جميع الملفات والوسائط تم أخذ الاذن بنشرها
         </p>
       </main>
     </AppShell>
