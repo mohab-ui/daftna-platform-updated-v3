@@ -4,7 +4,13 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { AttachmentIcon, AudioIcon, LinkIcon, PdfIcon } from "@/components/icons/FileIcons";
 import { IconStar, IconStarFilled } from "@/components/icons";
-import { FAVORITES_CHANGED_EVENT, isFavorite, toggleFavorite } from "@/lib/favorites";
+import {
+  FAVORITES_CHANGED_EVENT,
+  isFavorite,
+  removeFavorite,
+  toggleFavorite,
+  updateFavoriteMeta,
+} from "@/lib/favorites";
 
 export type ResourceRowItem = {
   id: string;
@@ -22,6 +28,12 @@ export type ResourceRowContext = {
   lecture_key?: string | null; // lecture_id or "__general__"
   lecture_title?: string | null;
 };
+
+const DEFAULT_TYPES = ["كتاب", "ملخص", "سلايدات", "امتحان سابق", "أسئلة", "ريكورد", "لينك"];
+
+function safeFileName(name: string) {
+  return name.replace(/[^\w.\-() ]+/g, "_");
+}
 
 function iconClassFor(t: string) {
   const v = (t || "").toLowerCase();
@@ -57,10 +69,32 @@ function iconFor(t: string) {
   return <AttachmentIcon />;
 }
 
-export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: ResourceRowContext }) {
-  const [busy, setBusy] = useState(false);
+export default function ResourceRow({
+  r,
+  ctx,
+  canManage = false,
+  onChanged,
+}: {
+  r: ResourceRowItem;
+  ctx?: ResourceRowContext;
+  canManage?: boolean;
+  onChanged?: () => void | Promise<void>;
+}) {
+  const [opening, setOpening] = useState(false);
+  const [mutating, setMutating] = useState(false);
+  const busy = opening || mutating;
+
   const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
   const [fav, setFav] = useState(false);
+
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editType, setEditType] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editExternalUrl, setEditExternalUrl] = useState("");
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [deleteOldFile, setDeleteOldFile] = useState(true);
 
   const iconClass = useMemo(() => iconClassFor(r.type), [r.type]);
   const iconSvg = useMemo(() => iconFor(r.type), [r.type]);
@@ -78,6 +112,7 @@ export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: Reso
 
   async function openResource() {
     setErr(null);
+    setOk(null);
     if (busy) return;
 
     if (r.external_url) {
@@ -90,7 +125,7 @@ export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: Reso
       return;
     }
 
-    setBusy(true);
+    setOpening(true);
     try {
       const { data, error } = await supabase.storage.from("resources").createSignedUrl(r.storage_path, 60);
 
@@ -101,7 +136,7 @@ export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: Reso
 
       window.open(data.signedUrl, "_blank", "noopener,noreferrer");
     } finally {
-      setBusy(false);
+      setOpening(false);
     }
   }
 
@@ -115,6 +150,9 @@ export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: Reso
   function toggleFav(e: React.MouseEvent) {
     e.preventDefault();
     e.stopPropagation();
+
+    setErr(null);
+    setOk(null);
 
     const next = toggleFavorite({
       id: r.id,
@@ -131,6 +169,187 @@ export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: Reso
     });
 
     setFav(next);
+  }
+
+  function startEdit(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (!canManage) return;
+
+    setErr(null);
+    setOk(null);
+
+    const next = !editing;
+    setEditing(next);
+
+    if (next) {
+      setEditTitle(r.title);
+      setEditType(r.type);
+      setEditDescription(r.description ?? "");
+      setEditExternalUrl(r.external_url ?? "");
+      setEditFile(null);
+      setDeleteOldFile(true);
+    }
+  }
+
+  async function saveEdit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    setOk(null);
+
+    if (!canManage) {
+      setErr("مش مسموح. التعديل للمشرفين فقط.");
+      return;
+    }
+
+    if (!editTitle.trim()) {
+      setErr("اكتب عنوان.");
+      return;
+    }
+
+    if (!editType.trim()) {
+      setErr("اختار/اكتب نوع المحتوى.");
+      return;
+    }
+
+    const nextExternal = editExternalUrl.trim() ? editExternalUrl.trim() : null;
+    const prevStorage = r.storage_path;
+    let nextStorage = r.storage_path;
+    let uploadedPath: string | null = null;
+    let warning: string | null = null;
+
+    setMutating(true);
+    try {
+      // Optional file replacement
+      if (editFile) {
+        const courseSeg = ctx?.course_id ?? "misc";
+        const lectureSeg = ctx?.lecture_key && ctx.lecture_key !== "__general__" ? ctx.lecture_key : "general";
+        const path = `${courseSeg}/${lectureSeg}/${Date.now()}_${safeFileName(editFile.name)}`;
+
+        const { error: upErr } = await supabase.storage
+          .from("resources")
+          .upload(path, editFile, { upsert: false });
+
+        if (upErr) {
+          setErr("فشل رفع الملف الجديد. تأكد من سياسات Storage.");
+          return;
+        }
+
+        // If upload succeeded, move DB to the new path.
+        uploadedPath = path;
+        nextStorage = path;
+      }
+
+      // Keep data valid: must have at least a file or a link.
+      if (!nextStorage && !nextExternal) {
+        setErr("لازم يكون في ملف أو لينك خارجي.");
+        return;
+      }
+
+      const { error: updErr } = await supabase
+        .from("resources")
+        .update({
+          title: editTitle.trim(),
+          type: editType.trim(),
+          description: editDescription.trim() ? editDescription.trim() : null,
+          external_url: nextExternal,
+          storage_path: nextStorage,
+        })
+        .eq("id", r.id);
+
+      if (updErr) {
+        // Best-effort cleanup: if we uploaded a new file but DB update failed, remove the uploaded file.
+        if (uploadedPath) {
+          await supabase.storage.from("resources").remove([uploadedPath]);
+        }
+        setErr("فشل حفظ التعديل. تأكد من الصلاحيات (RLS). ");
+        return;
+      }
+
+      // After DB update is committed, optionally delete the old file.
+      if (uploadedPath && deleteOldFile && prevStorage) {
+        const { error: rmOldErr } = await supabase.storage
+          .from("resources")
+          .remove([prevStorage]);
+        if (rmOldErr) {
+          warning = "تم رفع الملف الجديد ✅ لكن حذف الملف القديم من Storage فشل. ممكن تحذفه يدويًا من Supabase.";
+        }
+      }
+
+      // Keep current user's favorites in sync
+      if (isFavorite(r.id)) {
+        updateFavoriteMeta(r.id, {
+          title: editTitle.trim(),
+          type: editType.trim(),
+          description: editDescription.trim() ? editDescription.trim() : null,
+          external_url: nextExternal,
+          storage_path: nextStorage,
+        });
+      }
+
+      setOk("تم تحديث المحتوى ✅");
+      setEditing(false);
+      setEditFile(null);
+
+      // Show storage warning (if any) before refreshing (avoids setState-after-unmount).
+      if (warning) setErr(warning);
+
+      // Refresh list in parent
+      if (onChanged) await onChanged();
+    } finally {
+      setMutating(false);
+    }
+  }
+
+  async function deleteResource(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setErr(null);
+    setOk(null);
+
+    if (!canManage) {
+      setErr("مش مسموح. الحذف للمشرفين فقط.");
+      return;
+    }
+
+    const yes = confirm(
+      "متأكد إنك عايز تحذف المحتوى ده؟\n\nهيتم حذفه من الداتا بيز، ولو فيه ملف مرفوع هيتحذف من الـ Storage كمان."
+    );
+    if (!yes) return;
+
+    let warning: string | null = null;
+    const oldPath = r.storage_path;
+
+    setMutating(true);
+    try {
+      const { error: delErr } = await supabase.from("resources").delete().eq("id", r.id);
+      if (delErr) {
+        setErr("فشل حذف المحتوى من الداتا بيز. تأكد من الصلاحيات (RLS).");
+        return;
+      }
+
+      // Best-effort: delete the file from Storage after DB deletion.
+      if (oldPath) {
+        const { error: stErr } = await supabase.storage.from("resources").remove([oldPath]);
+        if (stErr) {
+          warning = "ملاحظة: تم حذف المحتوى من الداتا بيز ✅ لكن حذف الملف من Storage فشل. ممكن تحذفه يدويًا من Supabase.";
+        }
+      }
+
+      // Remove from favorites (for this browser) to avoid broken opens.
+      removeFavorite(r.id);
+
+      setOk("تم حذف المحتوى ✅");
+      setEditing(false);
+
+      // Show storage warning (if any) before refreshing (avoids setState-after-unmount).
+      if (warning) setErr(warning);
+
+      if (onChanged) await onChanged();
+    } finally {
+      setMutating(false);
+    }
   }
 
   return (
@@ -155,6 +374,31 @@ export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: Reso
         </div>
 
         <div className="fileRow__right">
+          {canManage ? (
+            <>
+              <button
+                type="button"
+                className={editing ? "favBtn favBtn--edit isActive" : "favBtn favBtn--edit"}
+                onClick={startEdit}
+                aria-label={editing ? "إغلاق التعديل" : "تعديل"}
+                title={editing ? "إغلاق التعديل" : "تعديل"}
+              >
+                ✏️
+              </button>
+
+              <button
+                type="button"
+                className="favBtn favBtn--danger"
+                onClick={deleteResource}
+                aria-label="حذف"
+                title="حذف"
+                disabled={busy}
+              >
+                🗑️
+              </button>
+            </>
+          ) : null}
+
           <button
             type="button"
             className={fav ? "favBtn isActive" : "favBtn"}
@@ -168,16 +412,121 @@ export default function ResourceRow({ r, ctx }: { r: ResourceRowItem; ctx?: Reso
           <span className="fileRow__badge">{r.type}</span>
 
           <span className="muted" style={{ fontSize: 12 }}>
-            {busy ? "..." : "فتح"}
+            {opening ? "..." : "فتح"}
           </span>
         </div>
       </div>
 
-      {err ? (
-        <div className="muted" style={{ marginTop: 6, color: "var(--danger)" }}>
-          {err}
+      {editing && canManage ? (
+        <div className="card card--soft" style={{ marginTop: 8 }}>
+          <form onSubmit={saveEdit}>
+            <div className="grid">
+              <div className="col-12 col-6">
+                <label className="label">العنوان</label>
+                <input
+                  className="input"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  disabled={busy}
+                />
+              </div>
+
+              <div className="col-12 col-6">
+                <label className="label">نوع المحتوى</label>
+                <select
+                  className="select"
+                  value={editType}
+                  onChange={(e) => setEditType(e.target.value)}
+                  disabled={busy}
+                >
+                  {Array.from(new Set([r.type, ...DEFAULT_TYPES])).map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="col-12">
+                <label className="label">وصف (اختياري)</label>
+                <textarea
+                  className="textarea"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows={3}
+                  disabled={busy}
+                />
+              </div>
+
+              <div className="col-12 col-6">
+                <label className="label">لينك خارجي (اختياري)</label>
+                <input
+                  className="input"
+                  value={editExternalUrl}
+                  onChange={(e) => setEditExternalUrl(e.target.value)}
+                  placeholder="https://..."
+                  disabled={busy}
+                />
+                <p className="muted" style={{ marginTop: 6 }}>
+                  {r.external_url ? "كان فيه لينك قبل كده. سيبه فاضي علشان يتم مسحه." : ""}
+                </p>
+              </div>
+
+              <div className="col-12 col-6">
+                <label className="label">استبدال الملف (اختياري)</label>
+                <input
+                  className="input"
+                  type="file"
+                  onChange={(e) => setEditFile(e.target.files?.[0] ?? null)}
+                  disabled={busy}
+                />
+
+                {r.storage_path ? (
+                  <label className="muted" style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={deleteOldFile}
+                      onChange={(e) => setDeleteOldFile(e.target.checked)}
+                      disabled={busy}
+                    />
+                    حذف الملف القديم من Storage بعد الرفع
+                  </label>
+                ) : (
+                  <p className="muted" style={{ marginTop: 8 }}>
+                    لو المورد ده كان لينك بس، تقدر تضيف ملف جديد هنا.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div style={{ height: 12 }} />
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button className="btn" type="submit" disabled={busy}>
+                {mutating ? "جاري الحفظ…" : "حفظ التعديل"}
+              </button>
+              <button
+                className="btn btn--ghost"
+                type="button"
+                onClick={() => {
+                  if (busy) return;
+                  setEditing(false);
+                  setErr(null);
+                  setOk(null);
+                }}
+                disabled={busy}
+              >
+                إلغاء
+              </button>
+            </div>
+
+            {ok ? <p className="success">{ok}</p> : null}
+            {err ? <p className="error">{err}</p> : null}
+          </form>
         </div>
       ) : null}
+
+      {!editing && ok ? <p className="success">{ok}</p> : null}
+      {!editing && err ? <p className="error">{err}</p> : null}
     </div>
   );
 }

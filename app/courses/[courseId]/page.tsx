@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import ResourceRow, { type ResourceRowItem } from "@/components/ResourceRow";
 import { supabase } from "@/lib/supabase";
+import { getMyProfile, isModerator, type UserRole } from "@/lib/profile";
 import { ChevronRightIcon, FolderIcon } from "@/components/icons/FileIcons";
 
 type Course = {
@@ -54,16 +55,36 @@ export default function CoursePage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
+  const [role, setRole] = useState<UserRole | null>(null);
+  const canManage = useMemo(() => isModerator(role as any), [role]);
+
   const [q, setQ] = useState("");
   const [type, setType] = useState<string>("الكل");
   const [openId, setOpenId] = useState<string | null>(null);
+
+  async function reloadResources() {
+    setErr(null);
+    const { data, error } = await supabase
+      .from("resources")
+      .select("id, title, type, description, storage_path, external_url, created_at, lecture_id")
+      .eq("course_id", courseId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setErr("مش قادر أجيب ملفات المادة.");
+      return;
+    }
+
+    setResources((data ?? []) as Resource[]);
+  }
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       setErr(null);
 
-      const [cRes, lRes, rRes] = await Promise.all([
+      const [profile, cRes, lRes, rRes] = await Promise.all([
+        getMyProfile(),
         supabase
           .from("courses")
           .select("id, code, name, semester, description")
@@ -84,6 +105,8 @@ export default function CoursePage() {
       ]);
 
       setLoading(false);
+
+      setRole(profile?.role ?? null);
 
       if (cRes.error) {
         setErr("مش قادر أجيب بيانات المادة.");
@@ -279,6 +302,8 @@ export default function CoursePage() {
                           <ResourceRow
                             key={r.id}
                             r={r}
+                            canManage={canManage}
+                            onChanged={reloadResources}
                             ctx={{
                               course_id: courseId,
                               course_code: course?.code ?? null,

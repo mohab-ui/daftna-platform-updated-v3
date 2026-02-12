@@ -72,6 +72,27 @@ export function removeFavorite(resourceId: string) {
   writeFavorites(next);
 }
 
+/**
+ * Update stored favorite metadata for the current user (localStorage).
+ * Useful when a moderator edits a resource title/type/link or storage path.
+ */
+export function updateFavoriteMeta(
+  resourceId: string,
+  patch: Partial<Pick<FavoriteResource, "title" | "type" | "description" | "storage_path" | "external_url">>
+) {
+  if (typeof window === "undefined") return;
+  const list = readFavorites();
+  const idx = list.findIndex((f) => f.id === resourceId);
+  if (idx < 0) return;
+
+  const next = [...list];
+  next[idx] = {
+    ...next[idx],
+    ...patch,
+  };
+  writeFavorites(next);
+}
+
 export function clearFavorites() {
   writeFavorites([]);
 }
