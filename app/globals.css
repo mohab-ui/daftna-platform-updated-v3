@@ -1303,6 +1303,31 @@ p{ line-height:1.75; margin: 8px 0 0; }
   padding: 4px 8px;
   border-radius: 999px;
 }
+/* Small action buttons on Resource rows (edit/delete) */
+.favBtn--edit{
+  background: rgba(16,185,129,.10);
+  border-color: rgba(16,185,129,.22);
+  color: rgba(16,185,129,.96);
+}
+.favBtn--edit:hover{
+  border-color: rgba(16,185,129,.45);
+  color: rgba(16,185,129,.98);
+}
+.favBtn--edit.isActive{
+  background: rgba(16,185,129,.16);
+  border-color: rgba(16,185,129,.55);
+  color: rgba(16,185,129,.98);
+}
+.favBtn--danger{
+  background: rgba(214,69,69,.10);
+  border-color: rgba(214,69,69,.25);
+  color: rgba(214,69,69,.96);
+}
+.favBtn--danger:hover{
+  border-color: rgba(214,69,69,.55);
+  color: rgba(214,69,69,.98);
+}
+
 
 /* =========================
    Tables

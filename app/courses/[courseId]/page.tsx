@@ -6,6 +6,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import AppShell from "@/components/AppShell";
 import ResourceRow, { type ResourceRowItem } from "@/components/ResourceRow";
 import { supabase } from "@/lib/supabase";
+import { getMyProfile, isModerator, type UserRole } from "@/lib/profile";
 import { ChevronRightIcon, FolderIcon } from "@/components/icons/FileIcons";
 
 type Course = {
@@ -69,10 +70,38 @@ export default function CoursePage() {
   const [type, setType] = useState<string>("الكل");
   const [openId, setOpenId] = useState<string | null>(null);
 
+  // ✅ صلاحيات (علشان edit/delete)
+  const [role, setRole] = useState<UserRole | null>(null);
+  const canManage = useMemo(() => isModerator(role as any), [role]);
+
+  // ✅ Reload للمحتوى بعد edit/delete
+  async function reloadResources() {
+    setErr(null);
+    const { data, error } = await supabase
+      .from("resources")
+      .select("id, title, type, description, storage_path, external_url, created_at, lecture_id")
+      .eq("course_id", courseId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setErr("مش قادر أجيب ملفات المادة.");
+      return;
+    }
+    setResources((data ?? []) as any);
+  }
+
   useEffect(() => {
     async function load() {
       setLoading(true);
       setErr(null);
+
+      // ✅ تحميل role
+      try {
+        const p = await getMyProfile();
+        setRole((p?.role as UserRole) ?? null);
+      } catch {
+        setRole(null);
+      }
 
       const [cRes, lRes, rRes] = await Promise.all([
         supabase
@@ -101,7 +130,7 @@ export default function CoursePage() {
       setCourse(cRes.data as Course);
 
       if (lRes.error) {
-        setErr("مش قادر أجيب المحاضرات/الفورماتيف. تأكد إنك شغّلت SQL بتاع kind.");
+        setErr("مش قادر أجيب المحاضرات/الفورماتيف. تأكد إنك شغّلت SQL بتاع kind/formative_no.");
         return;
       }
       setAllLectures((lRes.data ?? []) as Lecture[]);
@@ -110,13 +139,13 @@ export default function CoursePage() {
         setErr("مش قادر أجيب ملفات المادة.");
         return;
       }
-      setResources((rRes.data ?? []) as Resource[]);
+      setResources((rRes.data ?? []) as any);
     }
 
     load();
   }, [courseId]);
 
-  // Apply initial open lecture from query param (or first lecture).
+  // حفظ/قراءة المفتوح من query string
   useEffect(() => {
     const fromQuery = sp.get("lecture");
     if (!fromQuery) return;
@@ -139,11 +168,6 @@ export default function CoursePage() {
     });
   }, [resources, q, type]);
 
-  const generalResources = useMemo(
-    () => filteredResources.filter((r) => !r.lecture_id),
-    [filteredResources]
-  );
-
   const resourcesByLecture = useMemo(() => {
     const m = new Map<string, Resource[]>();
     for (const r of filteredResources) {
@@ -154,9 +178,17 @@ export default function CoursePage() {
     return m;
   }, [filteredResources]);
 
+  const generalResourcesCount = useMemo(() => {
+    return (resourcesByLecture.get("__general__") ?? []).length;
+  }, [resourcesByLecture]);
+
   const formatives = useMemo(() => {
     const list = allLectures.filter((l) => isFormative(l));
-    list.sort((a, b) => ((a.formative_no ?? a.order_index) as number) - ((b.formative_no ?? b.order_index) as number));
+    list.sort(
+      (a, b) =>
+        ((a.formative_no ?? a.order_index) as number) -
+        ((b.formative_no ?? b.order_index) as number)
+    );
     return list;
   }, [allLectures]);
 
@@ -168,33 +200,29 @@ export default function CoursePage() {
 
   const lectureNodes = useMemo(() => {
     const out: Array<{ id: string; title: string; order_index: number }> = [...lectures];
-    if (generalResources.length) out.unshift({ id: "__general__", title: "محتوى عام", order_index: -1 });
+    if (generalResourcesCount) out.unshift({ id: "__general__", title: "محتوى عام", order_index: -1 });
     return out;
-  }, [lectures, generalResources.length]);
-
-  const allNodeIds = useMemo(() => {
-    const nodes = [
-      ...formatives.map((f) => f.id),
-      ...lectureNodes.map((l) => l.id),
-    ];
-    return nodes;
-  }, [formatives, lectureNodes]);
+  }, [lectures, generalResourcesCount]);
 
   useEffect(() => {
     if (openId) return;
 
-    const hasGeneral = resources.some((r) => !r.lecture_id);
-    const firstWithResources =
-      allNodeIds.find((id) => (resourcesByLecture.get(id) ?? []).length > 0) ?? null;
+    // افتح أول عنصر عنده محتوى
+    const candidates = [
+      ...formatives.map((f) => f.id),
+      ...lectureNodes.map((l) => l.id),
+    ];
 
-    const fallback =
-      firstWithResources ||
-      lectureNodes[0]?.id ||
-      formatives[0]?.id ||
-      (hasGeneral ? "__general__" : null);
+    const firstWithResources = candidates.find((id) => (resourcesByLecture.get(id) ?? []).length > 0);
+    if (firstWithResources) {
+      setOpenId(firstWithResources);
+      return;
+    }
 
-    if (fallback) setOpenId(fallback);
-  }, [openId, allNodeIds, lectureNodes, formatives, resources, resourcesByLecture]);
+    // fallback
+    if (formatives[0]) setOpenId(formatives[0].id);
+    else if (lectureNodes[0]) setOpenId(lectureNodes[0].id);
+  }, [openId, formatives, lectureNodes, resourcesByLecture]);
 
   function toggle(id: string) {
     const next = openId === id ? null : id;
@@ -203,11 +231,15 @@ export default function CoursePage() {
     const nextParams = new URLSearchParams(sp.toString());
     if (next) nextParams.set("lecture", next);
     else nextParams.delete("lecture");
+
     const qs = nextParams.toString();
     router.replace(qs ? `/courses/${courseId}?${qs}` : `/courses/${courseId}`, { scroll: false });
   }
 
-  function renderNode(node: { id: string; title: string; order_index: number }, opts?: { quizHref?: string }) {
+  function renderNode(
+    node: { id: string; title: string; order_index: number },
+    opts?: { quizHref?: string }
+  ) {
     const list = resourcesByLecture.get(node.id) ?? [];
     const open = openId === node.id;
 
@@ -236,7 +268,7 @@ export default function CoursePage() {
             {opts?.quizHref ? (
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                 <Link className="btn" href={opts.quizHref}>
-                  اختبار MCQ لهذا الفورماتيف
+                  اختبار MCQ
                 </Link>
                 <Link className="btn btn--ghost" href="/mcq/history">
                   سجل المحاولات
@@ -249,6 +281,8 @@ export default function CoursePage() {
                 <ResourceRow
                   key={r.id}
                   r={r}
+                  canManage={canManage}
+                  onChanged={reloadResources}
                   ctx={{
                     course_id: courseId,
                     course_code: course?.code ?? null,
@@ -277,34 +311,39 @@ export default function CoursePage() {
         <div className="card">
           <div className="sectionHeader">
             <div className="sectionTitle" style={{ minWidth: 0 }}>
-              <div style={{ minWidth: 0 }}>
-                <p className="muted" style={{ marginTop: 0, marginBottom: 6 }}>
-                  <Link href="/dashboard" style={{ textDecoration: "underline" }}>
-                    الرئيسية
-                  </Link>{" "}
-                  ‹{" "}
-                  <span>
-                    {course?.semester
-                      ? yearLabelFromSemester(course.semester) ?? `ترم ${course.semester}`
-                      : "..."}
-                  </span>{" "}
-                  ‹ <span>{course?.code ?? "..."}</span>
+              <p className="muted" style={{ marginTop: 0, marginBottom: 6 }}>
+                <Link href="/dashboard" style={{ textDecoration: "underline" }}>
+                  الرئيسية
+                </Link>{" "}
+                ‹{" "}
+                <span>
+                  {course?.semester
+                    ? yearLabelFromSemester(course.semester) ?? `ترم ${course.semester}`
+                    : "..."}
+                </span>{" "}
+                ‹ <span>{course?.code ?? "..."}</span>
+              </p>
+
+              <h1
+                style={{
+                  marginBottom: 6,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {course ? `${course.code} — ${course.name}` : "..."}
+              </h1>
+
+              {course?.description ? (
+                <p className="muted" style={{ marginTop: 0 }}>
+                  {course.description}
                 </p>
-
-                <h1 style={{ marginBottom: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                  {course ? `${course.code} — ${course.name}` : "..."}
-                </h1>
-
-                {course?.description ? (
-                  <p className="muted" style={{ marginTop: 0 }}>
-                    {course.description}
-                  </p>
-                ) : (
-                  <p className="muted" style={{ marginTop: 0 }}>
-                    افتح القسم → هتلاقي السلايدات، الريكوردات، واللينكات.
-                  </p>
-                )}
-              </div>
+              ) : (
+                <p className="muted" style={{ marginTop: 0 }}>
+                  افتح القسم → هتلاقي السلايدات، الريكوردات، واللينكات.
+                </p>
+              )}
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -348,7 +387,7 @@ export default function CoursePage() {
           <div className="lectureTree">
             {/* ✅ قسم الفورماتيف */}
             {formatives.length ? (
-              <div className="card card--soft" style={{ padding: 14 }}>
+              <div className="card card--soft" style={{ padding: 14, marginTop: 12 }}>
                 <div className="sectionHeader" style={{ marginBottom: 10 }}>
                   <div className="sectionTitle">
                     <h2 style={{ margin: 0 }}>فورماتيف</h2>
@@ -366,7 +405,7 @@ export default function CoursePage() {
                         title: formativeLabel(f),
                         order_index: f.order_index,
                       },
-                      { quizHref: `/mcq?course=${courseId}&lecture=${f.id}` }
+                      { quizHref: `/mcq?course=${courseId}&group=formatives&formatives=${f.id}` }
                     )
                   )}
                 </div>
@@ -374,7 +413,7 @@ export default function CoursePage() {
             ) : null}
 
             {/* ✅ قسم المحاضرات */}
-            <div className="card card--soft" style={{ padding: 14 }}>
+            <div className="card card--soft" style={{ padding: 14, marginTop: 12 }}>
               <div className="sectionHeader" style={{ marginBottom: 10 }}>
                 <div className="sectionTitle">
                   <h2 style={{ margin: 0 }}>المحاضرات</h2>

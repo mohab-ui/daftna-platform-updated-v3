@@ -6,14 +6,13 @@ export type FavoriteResource = {
   storage_path: string | null;
   external_url: string | null;
 
-  // Context for quick navigation
   course_id: string | null;
   course_code: string | null;
   course_name: string | null;
-  lecture_key: string | null; // lecture_id or "__general__"
+  lecture_key: string | null;
   lecture_title: string | null;
 
-  saved_at: string; // ISO
+  saved_at: string;
 };
 
 export const FAVORITES_KEY = "daftna:favorites:v1";
@@ -32,20 +31,16 @@ export function readFavorites(): FavoriteResource[] {
   if (typeof window === "undefined") return [];
   const parsed = safeParse<FavoriteResource[]>(window.localStorage.getItem(FAVORITES_KEY));
   if (!Array.isArray(parsed)) return [];
-  // basic validation
   return parsed.filter((x) => x && typeof x.id === "string" && typeof x.title === "string");
 }
 
 export function writeFavorites(list: FavoriteResource[]) {
   if (typeof window === "undefined") return;
   try {
-    // Keep it small – limit to last 300 items
     const trimmed = list.slice(0, 300);
     window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(trimmed));
     window.dispatchEvent(new Event(FAVORITES_CHANGED_EVENT));
-  } catch {
-    // ignore quota errors etc.
-  }
+  } catch {}
 }
 
 export function isFavorite(resourceId: string): boolean {
@@ -72,10 +67,6 @@ export function removeFavorite(resourceId: string) {
   writeFavorites(next);
 }
 
-/**
- * Update stored favorite metadata for the current user (localStorage).
- * Useful when a moderator edits a resource title/type/link or storage path.
- */
 export function updateFavoriteMeta(
   resourceId: string,
   patch: Partial<Pick<FavoriteResource, "title" | "type" | "description" | "storage_path" | "external_url">>
@@ -86,10 +77,7 @@ export function updateFavoriteMeta(
   if (idx < 0) return;
 
   const next = [...list];
-  next[idx] = {
-    ...next[idx],
-    ...patch,
-  };
+  next[idx] = { ...next[idx], ...patch };
   writeFavorites(next);
 }
 

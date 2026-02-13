@@ -100,7 +100,6 @@ export default function ResourceRow({
   const iconSvg = useMemo(() => iconFor(r.type), [r.type]);
 
   useEffect(() => {
-    // init favorite state + keep in sync
     const sync = () => setFav(isFavorite(r.id));
     sync();
 
@@ -221,27 +220,22 @@ export default function ResourceRow({
 
     setMutating(true);
     try {
-      // Optional file replacement
       if (editFile) {
         const courseSeg = ctx?.course_id ?? "misc";
         const lectureSeg = ctx?.lecture_key && ctx.lecture_key !== "__general__" ? ctx.lecture_key : "general";
         const path = `${courseSeg}/${lectureSeg}/${Date.now()}_${safeFileName(editFile.name)}`;
 
-        const { error: upErr } = await supabase.storage
-          .from("resources")
-          .upload(path, editFile, { upsert: false });
+        const { error: upErr } = await supabase.storage.from("resources").upload(path, editFile, { upsert: false });
 
         if (upErr) {
           setErr("فشل رفع الملف الجديد. تأكد من سياسات Storage.");
           return;
         }
 
-        // If upload succeeded, move DB to the new path.
         uploadedPath = path;
         nextStorage = path;
       }
 
-      // Keep data valid: must have at least a file or a link.
       if (!nextStorage && !nextExternal) {
         setErr("لازم يكون في ملف أو لينك خارجي.");
         return;
@@ -259,7 +253,6 @@ export default function ResourceRow({
         .eq("id", r.id);
 
       if (updErr) {
-        // Best-effort cleanup: if we uploaded a new file but DB update failed, remove the uploaded file.
         if (uploadedPath) {
           await supabase.storage.from("resources").remove([uploadedPath]);
         }
@@ -267,17 +260,13 @@ export default function ResourceRow({
         return;
       }
 
-      // After DB update is committed, optionally delete the old file.
       if (uploadedPath && deleteOldFile && prevStorage) {
-        const { error: rmOldErr } = await supabase.storage
-          .from("resources")
-          .remove([prevStorage]);
+        const { error: rmOldErr } = await supabase.storage.from("resources").remove([prevStorage]);
         if (rmOldErr) {
           warning = "تم رفع الملف الجديد ✅ لكن حذف الملف القديم من Storage فشل. ممكن تحذفه يدويًا من Supabase.";
         }
       }
 
-      // Keep current user's favorites in sync
       if (isFavorite(r.id)) {
         updateFavoriteMeta(r.id, {
           title: editTitle.trim(),
@@ -292,10 +281,7 @@ export default function ResourceRow({
       setEditing(false);
       setEditFile(null);
 
-      // Show storage warning (if any) before refreshing (avoids setState-after-unmount).
       if (warning) setErr(warning);
-
-      // Refresh list in parent
       if (onChanged) await onChanged();
     } finally {
       setMutating(false);
@@ -329,7 +315,6 @@ export default function ResourceRow({
         return;
       }
 
-      // Best-effort: delete the file from Storage after DB deletion.
       if (oldPath) {
         const { error: stErr } = await supabase.storage.from("resources").remove([oldPath]);
         if (stErr) {
@@ -337,15 +322,11 @@ export default function ResourceRow({
         }
       }
 
-      // Remove from favorites (for this browser) to avoid broken opens.
       removeFavorite(r.id);
-
       setOk("تم حذف المحتوى ✅");
       setEditing(false);
 
-      // Show storage warning (if any) before refreshing (avoids setState-after-unmount).
       if (warning) setErr(warning);
-
       if (onChanged) await onChanged();
     } finally {
       setMutating(false);
@@ -354,14 +335,7 @@ export default function ResourceRow({
 
   return (
     <div>
-      <div
-        className="fileRow"
-        role="button"
-        tabIndex={0}
-        onClick={openResource}
-        onKeyDown={onKeyDown}
-        aria-disabled={busy}
-      >
+      <div className="fileRow" role="button" tabIndex={0} onClick={openResource} onKeyDown={onKeyDown} aria-disabled={busy}>
         <div className="fileRow__left">
           <div className={iconClass} aria-hidden>
             {iconSvg}
@@ -423,22 +397,12 @@ export default function ResourceRow({
             <div className="grid">
               <div className="col-12 col-6">
                 <label className="label">العنوان</label>
-                <input
-                  className="input"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  disabled={busy}
-                />
+                <input className="input" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} disabled={busy} />
               </div>
 
               <div className="col-12 col-6">
                 <label className="label">نوع المحتوى</label>
-                <select
-                  className="select"
-                  value={editType}
-                  onChange={(e) => setEditType(e.target.value)}
-                  disabled={busy}
-                >
+                <select className="select" value={editType} onChange={(e) => setEditType(e.target.value)} disabled={busy}>
                   {Array.from(new Set([r.type, ...DEFAULT_TYPES])).map((t) => (
                     <option key={t} value={t}>
                       {t}
@@ -449,13 +413,7 @@ export default function ResourceRow({
 
               <div className="col-12">
                 <label className="label">وصف (اختياري)</label>
-                <textarea
-                  className="textarea"
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  rows={3}
-                  disabled={busy}
-                />
+                <textarea className="textarea" value={editDescription} onChange={(e) => setEditDescription(e.target.value)} rows={3} disabled={busy} />
               </div>
 
               <div className="col-12 col-6">
@@ -474,21 +432,11 @@ export default function ResourceRow({
 
               <div className="col-12 col-6">
                 <label className="label">استبدال الملف (اختياري)</label>
-                <input
-                  className="input"
-                  type="file"
-                  onChange={(e) => setEditFile(e.target.files?.[0] ?? null)}
-                  disabled={busy}
-                />
+                <input className="input" type="file" onChange={(e) => setEditFile(e.target.files?.[0] ?? null)} disabled={busy} />
 
                 {r.storage_path ? (
                   <label className="muted" style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
-                    <input
-                      type="checkbox"
-                      checked={deleteOldFile}
-                      onChange={(e) => setDeleteOldFile(e.target.checked)}
-                      disabled={busy}
-                    />
+                    <input type="checkbox" checked={deleteOldFile} onChange={(e) => setDeleteOldFile(e.target.checked)} disabled={busy} />
                     حذف الملف القديم من Storage بعد الرفع
                   </label>
                 ) : (
