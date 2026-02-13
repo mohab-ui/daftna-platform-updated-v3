@@ -18,6 +18,8 @@ type McqQuestion = {
   explanation: string | null;
   course_id: string;
   lecture_id: string | null;
+  created_at: string;
+  lecture: { order_index: number } | null;
 };
 
 function letterFromIndex(i: number) {
@@ -105,13 +107,39 @@ export default function McqPage() {
       let q = supabase
         .from("mcq_questions")
         .select(
-          "id, question_text, choices, correct_index, explanation, course_id, lecture_id"
+          "id, question_text, choices, correct_index, explanation, course_id, lecture_id, created_at, lecture:lectures(order_index), is_archived"
         )
         .eq("course_id", courseId);
 
+      // hide archived questions for students (requires migration)
+      q = q.eq("is_archived", false);
+
       if (lectureId) q = q.eq("lecture_id", lectureId);
 
-      const { data, error } = await q.limit(50);
+      let data: any[] | null = null;
+      let error: any = null;
+
+      {
+        const res = await q.limit(50);
+        data = res.data as any;
+        error = res.error as any;
+      }
+
+      // Backward-compatible fallback if is_archived column doesn't exist yet
+      if (error && String(error.message ?? "").includes("is_archived")) {
+        let q2 = supabase
+          .from("mcq_questions")
+          .select(
+            "id, question_text, choices, correct_index, explanation, course_id, lecture_id, created_at, lecture:lectures(order_index)"
+          )
+          .eq("course_id", courseId);
+
+        if (lectureId) q2 = q2.eq("lecture_id", lectureId);
+
+        const res2 = await q2.limit(50);
+        data = res2.data as any;
+        error = res2.error as any;
+      }
 
       if (error) {
         setErr("في مشكلة في تحميل الأسئلة.");
@@ -124,7 +152,19 @@ export default function McqPage() {
         return;
       }
 
-      list.sort(() => Math.random() - 0.5);
+            // ✅ عرض الأسئلة بالترتيب (مش عشوائي)
+      // - لو مختار محاضرة: بالـ created_at
+      // - لو على مستوى المادة: حسب ترتيب المحاضرات ثم created_at
+      list.sort((a, b) => {
+        const at = new Date(a.created_at).getTime();
+        const bt = new Date(b.created_at).getTime();
+        if (lectureId) return at - bt;
+
+        const ao = a.lecture?.order_index ?? 9999;
+        const bo = b.lecture?.order_index ?? 9999;
+        if (ao !== bo) return ao - bo;
+        return at - bt;
+      });
 
       setQuestions(list);
 
