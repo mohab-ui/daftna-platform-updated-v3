@@ -8,12 +8,29 @@ import { getMyProfile, isModerator, UserRole } from "@/lib/profile";
 import { DraftQuestion, parseMcqText, letterFromIndex } from "@/lib/mcqParse";
 
 type Course = { id: string; code: string; name: string };
-type Lecture = { id: string; title: string; order_index: number };
+
+// ✅ أضفنا kind + formative_no علشان نفرّق فورماتيف
+type Lecture = {
+  id: string;
+  title: string;
+  order_index: number;
+  kind?: string; // 'lecture' | 'formative'
+  formative_no?: number | null;
+};
 
 type Draft = DraftQuestion & {
   correctIndex: number | null;
   explanation?: string;
 };
+
+function isFormative(l: Lecture) {
+  return (l.kind ?? "lecture") === "formative";
+}
+
+function formativeLabel(l: Lecture) {
+  const no = (l.formative_no ?? l.order_index) as number;
+  return `فورماتيف ${no}`;
+}
 
 export default function AdminMcqImportPage() {
   const [role, setRole] = useState<UserRole | null>(null);
@@ -69,13 +86,20 @@ export default function AdminMcqImportPage() {
     async function loadLectures() {
       setLectures([]);
       if (!courseId) return;
+
+      // ✅ هنا التعديل الأساسي: kind + formative_no
       const { data, error } = await supabase
         .from("lectures")
-        .select("id, title, order_index")
+        .select("id, title, order_index, kind, formative_no")
         .eq("course_id", courseId)
         .order("order_index", { ascending: true });
 
-      if (!error) setLectures((data ?? []) as Lecture[]);
+      if (error) {
+        setErr("مشكلة في تحميل المحاضرات/الفورماتيف. تأكد إنك شغّلت SQL بتاع kind/formative_no.");
+        return;
+      }
+
+      setLectures((data ?? []) as Lecture[]);
     }
 
     if (!loadingRole && canManage) loadLectures();
@@ -111,21 +135,32 @@ export default function AdminMcqImportPage() {
 
     const merged: Draft[] = list.map((q) => ({
       ...q,
-      correctIndex: typeof q.detectedCorrect === "number" && q.detectedCorrect >= 0 ? q.detectedCorrect : null,
+      correctIndex:
+        typeof q.detectedCorrect === "number" && q.detectedCorrect >= 0
+          ? q.detectedCorrect
+          : null,
       explanation: "",
     }));
 
     setDrafts(merged);
     const needs = merged.filter((d) => d.needsReview).length;
-    setInfo(`تم استخراج ${merged.length} سؤال. ${needs ? `(${needs} محتاج مراجعة بسيطة)` : ""}`);
+    setInfo(
+      `تم استخراج ${merged.length} سؤال. ${
+        needs ? `(${needs} محتاج مراجعة بسيطة)` : ""
+      }`
+    );
   }
 
   function setCorrect(qi: number, ci: number) {
-    setDrafts((prev) => prev.map((d, i) => (i === qi ? { ...d, correctIndex: ci } : d)));
+    setDrafts((prev) =>
+      prev.map((d, i) => (i === qi ? { ...d, correctIndex: ci } : d))
+    );
   }
 
   function setExplanation(qi: number, val: string) {
-    setDrafts((prev) => prev.map((d, i) => (i === qi ? { ...d, explanation: val } : d)));
+    setDrafts((prev) =>
+      prev.map((d, i) => (i === qi ? { ...d, explanation: val } : d))
+    );
   }
 
   async function saveAll() {
@@ -142,7 +177,9 @@ export default function AdminMcqImportPage() {
     }
 
     // Validate
-    const bad = drafts.find((d) => d.correctIndex === null || d.correctIndex === undefined || d.correctIndex < 0);
+    const bad = drafts.find(
+      (d) => d.correctIndex === null || d.correctIndex === undefined || d.correctIndex < 0
+    );
     if (bad) {
       setErr("في أسئلة لسه ما اخترتش الإجابة الصحيحة بتاعتها. اختار A/B/C/D لكل سؤال.");
       return;
@@ -158,7 +195,7 @@ export default function AdminMcqImportPage() {
     try {
       const payload = drafts.map((d) => ({
         course_id: courseId,
-        lecture_id: lectureId ? lectureId : null,
+        lecture_id: lectureId ? lectureId : null, // ✅ يقدر يكون فورماتيف
         question_text: d.question,
         choices: d.choices,
         correct_index: d.correctIndex!,
@@ -168,7 +205,7 @@ export default function AdminMcqImportPage() {
 
       const { error } = await supabase.from("mcq_questions").insert(payload);
       if (error) {
-        setErr("مشكلة في حفظ الأسئلة. تأكد إنك شغّلت Migration وأن حسابك مشرف.");
+        setErr(`مشكلة في حفظ الأسئلة: ${error.message}`);
         return;
       }
 
@@ -187,12 +224,26 @@ export default function AdminMcqImportPage() {
           <div className="card">
             <h1>غير مسموح</h1>
             <p className="muted">الصفحة دي للمشرفين فقط.</p>
-            <Link className="btn" href="/dashboard">رجوع</Link>
+            <Link className="btn" href="/dashboard">
+              رجوع
+            </Link>
           </div>
         </main>
       </AppShell>
     );
   }
+
+  const lecturesOnly = lectures
+    .filter((l) => !isFormative(l))
+    .sort((a, b) => a.order_index - b.order_index);
+
+  const formativesOnly = lectures
+    .filter((l) => isFormative(l))
+    .sort(
+      (a, b) =>
+        ((a.formative_no ?? a.order_index) as number) -
+        ((b.formative_no ?? b.order_index) as number)
+    );
 
   return (
     <AppShell>
@@ -206,15 +257,29 @@ export default function AdminMcqImportPage() {
               </p>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Link className="btn btn--ghost" href="/admin/mcq">رجوع</Link>
-              <Link className="btn btn--ghost" href="/admin/mcq/questions">بنك الأسئلة</Link>
+              <Link className="btn btn--ghost" href="/admin/mcq">
+                رجوع
+              </Link>
+              <Link className="btn btn--ghost" href="/admin/mcq/questions">
+                بنك الأسئلة
+              </Link>
             </div>
           </div>
 
           <div className="grid" style={{ marginTop: 12 }}>
             <div className="col-12 col-6">
               <label className="label">المادة</label>
-              <select className="select" value={courseId} onChange={(e) => { setCourseId(e.target.value); setLectureId(""); }}>
+              <select
+                className="select"
+                value={courseId}
+                onChange={(e) => {
+                  setCourseId(e.target.value);
+                  setLectureId("");
+                  setDrafts([]);
+                  setInfo(null);
+                  setErr(null);
+                }}
+              >
                 <option value="">اختر مادة…</option>
                 {courses.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -225,15 +290,37 @@ export default function AdminMcqImportPage() {
             </div>
 
             <div className="col-12 col-6">
-              <label className="label">المحاضرة (اختياري)</label>
-              <select className="select" value={lectureId || ""} onChange={(e) => setLectureId(e.target.value)} disabled={!courseId}>
+              <label className="label">المحاضرة / فورماتيف (اختياري)</label>
+              <select
+                className="select"
+                value={lectureId || ""}
+                onChange={(e) => setLectureId(e.target.value)}
+                disabled={!courseId}
+              >
                 <option value="">(عام للمادة)</option>
-                {lectures.map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {l.title}
-                  </option>
-                ))}
+
+                <optgroup label="المحاضرات">
+                  {lecturesOnly.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.title}
+                    </option>
+                  ))}
+                </optgroup>
+
+                <optgroup label="الفورماتيف">
+                  {formativesOnly.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {formativeLabel(l)}
+                    </option>
+                  ))}
+                </optgroup>
               </select>
+
+              {!courseId ? (
+                <p className="muted" style={{ marginTop: 6 }}>
+                  اختار مادة الأول علشان تظهر المحاضرات والفورماتيف.
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -252,7 +339,14 @@ export default function AdminMcqImportPage() {
             <button className="btn" onClick={parse}>
               تحويل النص لأسئلة
             </button>
-            <button className="btn btn--ghost" onClick={() => { setDrafts([]); setInfo(null); setErr(null); }}>
+            <button
+              className="btn btn--ghost"
+              onClick={() => {
+                setDrafts([]);
+                setInfo(null);
+                setErr(null);
+              }}
+            >
               مسح الـ Preview
             </button>
             <button className="btn" onClick={saveAll} disabled={saving || drafts.length === 0}>
@@ -260,8 +354,16 @@ export default function AdminMcqImportPage() {
             </button>
           </div>
 
-          {info ? <p className="muted" style={{ marginTop: 10 }}>{info}</p> : null}
-          {err ? <p className="error" style={{ marginTop: 10 }}>{err}</p> : null}
+          {info ? (
+            <p className="muted" style={{ marginTop: 10 }}>
+              {info}
+            </p>
+          ) : null}
+          {err ? (
+            <p className="error" style={{ marginTop: 10 }}>
+              {err}
+            </p>
+          ) : null}
         </div>
 
         {drafts.length ? (
@@ -276,7 +378,9 @@ export default function AdminMcqImportPage() {
 
               <div className="kpis">
                 <span className="kpi">الإجمالي: {drafts.length}</span>
-                <span className="kpi">بدون إجابة: {drafts.filter((d) => d.correctIndex === null).length}</span>
+                <span className="kpi">
+                  بدون إجابة: {drafts.filter((d) => d.correctIndex === null).length}
+                </span>
                 <span className="kpi">Needs review: {drafts.filter((d) => d.needsReview).length}</span>
               </div>
             </div>
@@ -287,14 +391,29 @@ export default function AdminMcqImportPage() {
                   <div className="sectionHeader">
                     <div className="sectionTitle" style={{ minWidth: 0 }}>
                       <h3 style={{ marginBottom: 6 }}>
-                        سؤال {qi + 1} {d.needsReview ? <span className="pill" style={{ borderColor: "rgba(255,106,106,.7)", color: "rgba(255,106,106,.95)" }}>Review</span> : null}
+                        سؤال {qi + 1}{" "}
+                        {d.needsReview ? (
+                          <span
+                            className="pill"
+                            style={{
+                              borderColor: "rgba(255,106,106,.7)",
+                              color: "rgba(255,106,106,.95)",
+                            }}
+                          >
+                            Review
+                          </span>
+                        ) : null}
                       </h3>
-                      <div className="muted" style={{ whiteSpace: "pre-wrap" }}>{d.question}</div>
+                      <div className="muted" style={{ whiteSpace: "pre-wrap" }}>
+                        {d.question}
+                      </div>
                     </div>
 
                     <div className="kpis">
                       <span className="kpi">{d.choices.length} اختيارات</span>
-                      <span className="kpi">Correct: {d.correctIndex !== null ? letterFromIndex(d.correctIndex) : "—"}</span>
+                      <span className="kpi">
+                        Correct: {d.correctIndex !== null ? letterFromIndex(d.correctIndex) : "—"}
+                      </span>
                     </div>
                   </div>
 
@@ -312,7 +431,11 @@ export default function AdminMcqImportPage() {
                         >
                           <span className="mcqOption__letter">{letterFromIndex(ci)}</span>
                           <span className="mcqOption__text">{c}</span>
-                          {selected ? <span className="mcqTag mcqTag--ok">Correct</span> : <span className="mcqTag">اختر</span>}
+                          {selected ? (
+                            <span className="mcqTag mcqTag--ok">Correct</span>
+                          ) : (
+                            <span className="mcqTag">اختر</span>
+                          )}
                         </button>
                       );
                     })}
