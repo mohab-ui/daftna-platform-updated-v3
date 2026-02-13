@@ -87,7 +87,7 @@ export default function McqHistoryClient() {
 
       // ✅ هنا التعديل المهم: mcq_quizzes بدل mcq_quiz_attempts
       const { data, error } = await supabase
-        .from("mcq_quizzes")
+        .from("mcq_quizzes_with_stats")
         .select(
           `
           id,
