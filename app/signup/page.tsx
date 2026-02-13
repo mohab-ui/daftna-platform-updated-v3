@@ -87,7 +87,7 @@ export default function SignupPage() {
       <div className="authCard">
         <div className="card">
           <div className="authBrand">
-            <img className="authLogo" src="/logo.svg" alt="" />
+            <img className="authLogo" src="/logo.png" alt="" />
             <div className="authBrandText">
               <div className="authBrandTitle">دفعتنا</div>
               <div className="authBrandSub">منصة الدفعة</div>

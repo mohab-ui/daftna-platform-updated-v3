@@ -121,7 +121,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="sidebar__inner">
             <div className="sidebar__brand">
               <div className="brandMark" aria-hidden>
-                <img className="brandLogo" src="/logo.svg" alt="" />
+                <img className="brandLogo" src="/logo.png" alt="" />
               </div>
               <div className="sidebar__brandText">
                 <div className="sidebar__title">منصة دفعتنا</div>
