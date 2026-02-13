@@ -16,6 +16,7 @@ type QRow = {
   question_text: string;
   correct_index: number;
   created_at: string;
+  is_archived?: boolean;
   course: { id: string; code: string; name: string } | null;
   lecture: { id: string; title: string } | null;
 };
@@ -33,6 +34,8 @@ export default function AdminMcqQuestionsPage() {
   const [rows, setRows] = useState<QRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  const [showArchived, setShowArchived] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -57,9 +60,14 @@ export default function AdminMcqQuestionsPage() {
 
   useEffect(() => {
     async function loadCourses() {
-      const { data } = await supabase.from("courses").select("id, code, name").order("code", { ascending: true });
+      const { data } = await supabase
+        .from("courses")
+        .select("id, code, name")
+        .order("code", { ascending: true });
+
       setCourses((data ?? []) as Course[]);
     }
+
     if (!loadingRole && canManage) loadCourses();
   }, [loadingRole, canManage]);
 
@@ -67,41 +75,115 @@ export default function AdminMcqQuestionsPage() {
     async function loadLectures() {
       setLectures([]);
       if (!courseId) return;
+
       const { data } = await supabase
         .from("lectures")
         .select("id, title, order_index")
         .eq("course_id", courseId)
         .order("order_index", { ascending: true });
+
       setLectures((data ?? []) as Lecture[]);
     }
+
     if (!loadingRole && canManage) loadLectures();
   }, [courseId, loadingRole, canManage]);
 
   async function loadQuestions() {
     setErr(null);
     setLoading(true);
+
     try {
       let query = supabase
         .from("mcq_questions")
-        .select("id, question_text, correct_index, created_at, course:courses(id,code,name), lecture:lectures(id,title)")
+        .select(
+          "id, question_text, correct_index, created_at, is_archived, course:courses(id,code,name), lecture:lectures(id,title)"
+        )
         .order("created_at", { ascending: false })
         .limit(300);
 
       if (courseId) query = query.eq("course_id", courseId);
       if (lectureId) query = query.eq("lecture_id", lectureId);
 
+      // افتراضيًا: اخفي المؤرشف (إلا لو المشرف فعل إظهار المؤرشف)
+      if (!showArchived) query = query.eq("is_archived", false);
+
       const term = q.trim();
       if (term) query = query.ilike("question_text", `%${term}%`);
 
       const { data, error } = await query;
+
       if (error) {
-        setErr("مشكلة في تحميل بنك الأسئلة. تأكد إن MCQ migration متنفّذ.");
+        setErr(`مشكلة في تحميل بنك الأسئلة: ${error.message}`);
         return;
       }
+
       setRows((data ?? []) as any as QRow[]);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function remove(id: string) {
+    const ok = confirm(
+      "تأكيد حذف السؤال؟\n\nملحوظة: لو السؤال مستخدم في كويز/محاولات قديمة ممكن القاعدة تمنع الحذف، وساعتها هنقترح إخفاءه بدل الحذف."
+    );
+    if (!ok) return;
+
+    // 1) جرّب حذف نهائي
+    const del = await supabase.from("mcq_questions").delete().eq("id", id);
+
+    if (!del.error) {
+      setRows((prev) => prev.filter((r) => r.id !== id));
+      return;
+    }
+
+    // 2) لو فشل → اعرض السبب الحقيقي واقترح أرشفة
+    const msg = `${del.error.code ?? ""} ${del.error.message ?? ""}`.trim();
+    const doArchive = confirm(
+      `الحذف فشل.\n\nالسبب: ${msg}\n\nده غالبًا لأن السؤال مستخدم في كويز/محاولات قديمة.\nتحب نخفي السؤال عن الطلبة (أرشفة) بدل الحذف؟`
+    );
+    if (!doArchive) return;
+
+    const up = await supabase
+      .from("mcq_questions")
+      .update({ is_archived: true })
+      .eq("id", id);
+
+    if (up.error) {
+      alert(`فشل إخفاء السؤال: ${up.error.message}`);
+      return;
+    }
+
+    // لو انت مخفي المؤرشف، شيله من القائمة بعد الأرشفة
+    setRows((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  async function editCorrectAnswer(id: string, current: number) {
+    const input = prompt(
+      "اكتب رقم الإجابة الصحيحة (0 للأولى، 1 للتانية…)",
+      String(current)
+    );
+    if (input === null) return;
+
+    const next = Number(input);
+    if (!Number.isInteger(next) || next < 0 || next > 10) {
+      alert("رقم غير صحيح. لازم يكون رقم صحيح (0..10)");
+      return;
+    }
+
+    const { error } = await supabase
+      .from("mcq_questions")
+      .update({ correct_index: next })
+      .eq("id", id);
+
+    if (error) {
+      alert(`فشل التعديل: ${error.message}`);
+      return;
+    }
+
+    setRows((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, correct_index: next } : r))
+    );
   }
 
   useEffect(() => {
@@ -109,6 +191,13 @@ export default function AdminMcqQuestionsPage() {
     loadQuestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canManage]);
+
+  // لما تغيّر showArchived أو الفلاتر، اعمل reload تلقائيًا (اختياري، بس مريح)
+  useEffect(() => {
+    if (!canManage) return;
+    loadQuestions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showArchived, courseId, lectureId]);
 
   if (loadingRole) {
     return (
@@ -123,17 +212,6 @@ export default function AdminMcqQuestionsPage() {
     );
   }
 
-  async function remove(id: string) {
-    const ok = confirm("تأكيد حذف السؤال؟");
-    if (!ok) return;
-    const { error } = await supabase.from("mcq_questions").delete().eq("id", id);
-    if (error) {
-      alert("مقدرش أحذف السؤال. تأكد إنك مشرف.");
-      return;
-    }
-    setRows((prev) => prev.filter((r) => r.id !== id));
-  }
-
   if (!canManage) {
     return (
       <AppShell>
@@ -141,7 +219,9 @@ export default function AdminMcqQuestionsPage() {
           <div className="card">
             <h1>غير مسموح</h1>
             <p className="muted">الصفحة دي للمشرفين فقط.</p>
-            <Link className="btn" href="/dashboard">رجوع</Link>
+            <Link className="btn" href="/dashboard">
+              رجوع
+            </Link>
           </div>
         </main>
       </AppShell>
@@ -156,19 +236,30 @@ export default function AdminMcqQuestionsPage() {
             <div className="sectionTitle">
               <h1 style={{ marginBottom: 6 }}>بنك الأسئلة</h1>
               <p className="muted" style={{ marginTop: 0 }}>
-                ابحث وفلتر. تقدر تحذف الأسئلة اللي غلط أو مكررة.
+                ابحث وفلتر. تقدر تعدّل الإجابة الصح، وتمسح السؤال، أو تخفيه عن الطلبة لو كان مستخدم قبل كده.
               </p>
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <Link className="btn" href="/admin/mcq/import">إضافة (Paste)</Link>
-              <Link className="btn btn--ghost" href="/admin/mcq">رجوع</Link>
+              <Link className="btn" href="/admin/mcq/import">
+                إضافة (Paste)
+              </Link>
+              <Link className="btn btn--ghost" href="/admin/mcq">
+                رجوع
+              </Link>
             </div>
           </div>
 
           <div className="grid" style={{ marginTop: 12 }}>
             <div className="col-12 col-4">
               <label className="label">المادة</label>
-              <select className="select" value={courseId} onChange={(e) => { setCourseId(e.target.value); setLectureId(""); }}>
+              <select
+                className="select"
+                value={courseId}
+                onChange={(e) => {
+                  setCourseId(e.target.value);
+                  setLectureId("");
+                }}
+              >
                 <option value="">الكل</option>
                 {courses.map((c) => (
                   <option key={c.id} value={c.id}>
@@ -180,7 +271,12 @@ export default function AdminMcqQuestionsPage() {
 
             <div className="col-12 col-4">
               <label className="label">المحاضرة</label>
-              <select className="select" value={lectureId} onChange={(e) => setLectureId(e.target.value)} disabled={!courseId}>
+              <select
+                className="select"
+                value={lectureId}
+                onChange={(e) => setLectureId(e.target.value)}
+                disabled={!courseId}
+              >
                 <option value="">الكل</option>
                 {lectures.map((l) => (
                   <option key={l.id} value={l.id}>
@@ -192,18 +288,38 @@ export default function AdminMcqQuestionsPage() {
 
             <div className="col-12 col-4">
               <label className="label">بحث في نص السؤال</label>
-              <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="اكتب كلمة…" />
+              <input
+                className="input"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="اكتب كلمة…"
+              />
             </div>
           </div>
 
-          <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
             <button className="btn" onClick={loadQuestions} disabled={loading}>
               {loading ? "جاري التحميل…" : "تحديث"}
             </button>
+
+            <label className="pill" style={{ display: "inline-flex", gap: 8, alignItems: "center", cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={showArchived}
+                onChange={(e) => setShowArchived(e.target.checked)}
+                style={{ accentColor: "currentColor" }}
+              />
+              إظهار المؤرشف
+            </label>
+
             <span className="pill">{rows.length} سؤال</span>
           </div>
 
-          {err ? <p className="error" style={{ marginTop: 10 }}>{err}</p> : null}
+          {err ? (
+            <p className="error" style={{ marginTop: 10 }}>
+              {err}
+            </p>
+          ) : null}
         </div>
 
         <div className="card" style={{ marginTop: 12 }}>
@@ -218,19 +334,42 @@ export default function AdminMcqQuestionsPage() {
                       {r.course ? `${r.course.code}` : "—"}
                       {r.lecture ? ` • ${r.lecture.title}` : ""}
                       {" • "}
-                      <span className="muted">Correct: {letterFromIndex(r.correct_index)}</span>
+                      <span className="muted">
+                        Correct: {letterFromIndex(r.correct_index)}
+                        {r.is_archived ? " • (مؤرشف)" : ""}
+                      </span>
                     </div>
-                    <div className="muted" style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+
+                    <div
+                      className="muted"
+                      style={{
+                        fontSize: 13,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
                       {r.question_text}
                     </div>
+
                     <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                       {fmtDate(r.created_at)}
                     </div>
                   </div>
 
-                  <button className="btn btn--ghost" onClick={() => remove(r.id)}>
-                    حذف
-                  </button>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button
+                      className="btn btn--ghost"
+                      onClick={() => editCorrectAnswer(r.id, r.correct_index)}
+                      title="تغيير correct_index"
+                    >
+                      تعديل الإجابة الصح
+                    </button>
+
+                    <button className="btn btn--ghost btn--danger" onClick={() => remove(r.id)}>
+                      حذف / إخفاء
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
