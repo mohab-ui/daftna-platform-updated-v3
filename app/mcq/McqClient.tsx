@@ -35,9 +35,7 @@ export default function McqPage() {
 
   const [courseId, setCourseId] = useState<string>(sp.get("course") ?? "");
   const [lectureId, setLectureId] = useState<string>(sp.get("lecture") ?? "");
-  const [mode, setMode] = useState<"practice" | "exam">(
-    sp.get("mode") === "exam" ? "exam" : "practice"
-  );
+  const [mode, setMode] = useState<"practice" | "exam">(sp.get("mode") === "exam" ? "exam" : "practice");
 
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -47,7 +45,7 @@ export default function McqPage() {
   const [answers, setAnswers] = useState<Record<string, number>>({});
   const [submitted, setSubmitted] = useState(false);
 
-  // ✅ جديد: في التدريب نكشف نتيجة كل سؤال بمجرد اختيار الإجابة
+  // ✅ في التدريب نكشف نتيجة كل سؤال بمجرد اختيار الإجابة
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
 
   // ✅ وقت بداية المحاولة
@@ -57,10 +55,7 @@ export default function McqPage() {
 
   useEffect(() => {
     async function loadCourses() {
-      const { data } = await supabase
-        .from("courses")
-        .select("id, code, name")
-        .order("code", { ascending: true });
+      const { data } = await supabase.from("courses").select("id, code, name").order("code", { ascending: true });
       setCourses((data ?? []) as Course[]);
     }
     loadCourses();
@@ -104,6 +99,7 @@ export default function McqPage() {
         return;
       }
 
+      // ✅ نحاول نجيب الأسئلة + ترتيب المحاضرة + is_archived (لو موجود)
       let q = supabase
         .from("mcq_questions")
         .select(
@@ -111,7 +107,7 @@ export default function McqPage() {
         )
         .eq("course_id", courseId);
 
-      // hide archived questions for students (requires migration)
+      // نخفي المؤرشف عن الطلاب (لو migration متنفّذ)
       q = q.eq("is_archived", false);
 
       if (lectureId) q = q.eq("lecture_id", lectureId);
@@ -125,7 +121,7 @@ export default function McqPage() {
         error = res.error as any;
       }
 
-      // Backward-compatible fallback if is_archived column doesn't exist yet
+      // ✅ Backward-compatible fallback لو is_archived مش موجودة عندك لسه
       if (error && String(error.message ?? "").includes("is_archived")) {
         let q2 = supabase
           .from("mcq_questions")
@@ -152,12 +148,13 @@ export default function McqPage() {
         return;
       }
 
-            // ✅ عرض الأسئلة بالترتيب (مش عشوائي)
+      // ✅ عرض الأسئلة بالترتيب (مش عشوائي)
       // - لو مختار محاضرة: بالـ created_at
       // - لو على مستوى المادة: حسب ترتيب المحاضرات ثم created_at
       list.sort((a, b) => {
         const at = new Date(a.created_at).getTime();
         const bt = new Date(b.created_at).getTime();
+
         if (lectureId) return at - bt;
 
         const ao = a.lecture?.order_index ?? 9999;
@@ -264,15 +261,7 @@ export default function McqPage() {
     }
   }
 
-  const correctCount = useMemo(
-    () => questions.filter((q) => answers[q.id] === q.correct_index).length,
-    [questions, answers]
-  );
-
-  const progress = useMemo(
-    () => (questions.length ? `${idx + 1}/${questions.length}` : "0/0"),
-    [idx, questions.length]
-  );
+  const selectedForCurrent = current ? answers[current.id] : undefined;
 
   return (
     <AppShell>
@@ -280,20 +269,15 @@ export default function McqPage() {
         <div className="card">
           <div className="sectionHeader">
             <div className="sectionTitle">
-              <h1 style={{ marginBottom: 6 }}>اختبارات MCQ</h1>
+              <h1 style={{ marginBottom: 6 }}>MCQ</h1>
               <p className="muted" style={{ marginTop: 0 }}>
-                اختار المادة/المحاضرة واضغط «ابدأ». تقدر تعمل تدريب أو امتحان.
+                اختار مادة/محاضرة وابدأ. (الأسئلة بتظهر بالترتيب)
               </p>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <a className="btn btn--ghost" href="/mcq/history">
-                سجل المحاولات
-              </a>
             </div>
           </div>
 
           <div className="grid" style={{ marginTop: 12 }}>
-            <div className="col-12 col-6">
+            <div className="col-12 col-4">
               <label className="label">المادة</label>
               <select
                 className="select"
@@ -303,7 +287,7 @@ export default function McqPage() {
                   setLectureId("");
                 }}
               >
-                <option value="">اختر مادة…</option>
+                <option value="">اختر…</option>
                 {courses.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.code} — {c.name}
@@ -312,15 +296,15 @@ export default function McqPage() {
               </select>
             </div>
 
-            <div className="col-12 col-6">
+            <div className="col-12 col-4">
               <label className="label">المحاضرة (اختياري)</label>
               <select
                 className="select"
-                value={lectureId || ""}
+                value={lectureId}
                 onChange={(e) => setLectureId(e.target.value)}
                 disabled={!courseId}
               >
-                <option value="">(كل أسئلة المادة)</option>
+                <option value="">الكل</option>
                 {lectures.map((l) => (
                   <option key={l.id} value={l.id}>
                     {l.title}
@@ -329,118 +313,93 @@ export default function McqPage() {
               </select>
             </div>
 
-            <div className="col-12 col-6">
+            <div className="col-12 col-4">
               <label className="label">الوضع</label>
-              <select className="select" value={mode} onChange={(e) => setMode(e.target.value as any)}>
+              <select className="select" value={mode} onChange={(e) => setMode(e.target.value === "exam" ? "exam" : "practice")}>
                 <option value="practice">تدريب</option>
                 <option value="exam">امتحان</option>
               </select>
             </div>
+          </div>
 
-            <div className="col-12 col-6" style={{ display: "flex", alignItems: "end" }}>
-              <button className="btn" onClick={start} disabled={!canStart || loading}>
-                {loading ? "جاري التحميل…" : "ابدأ"}
-              </button>
-            </div>
+          <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+            <button className="btn" onClick={start} disabled={!canStart || loading}>
+              {loading ? "جاري التحميل…" : "ابدأ"}
+            </button>
+
+            <span className="pill">{questions.length ? `${idx + 1} / ${questions.length}` : "—"}</span>
           </div>
 
           {err ? (
-            <p className="error" style={{ marginTop: 12 }}>
+            <p className="error" style={{ marginTop: 10 }}>
               {err}
             </p>
           ) : null}
         </div>
 
-        {questions.length ? (
+        {current ? (
           <div className="card" style={{ marginTop: 12 }}>
-            <div className="sectionHeader">
-              <div className="sectionTitle" style={{ minWidth: 0 }}>
-                <div className="rowTitle">
-                  سؤال {progress}
-                  {submitted ? (
-                    <span className="pill" style={{ marginInlineStart: 10 }}>
-                      تم التسليم
-                    </span>
-                  ) : null}
-                </div>
-                <div className="muted" style={{ fontSize: 13 }}>
-                  التقدم: {correctCount} / {questions.length}
-                </div>
-              </div>
-
-              <div className="kpis">
-                <span className="kpi">Mode: {mode === "exam" ? "امتحان" : "تدريب"}</span>
-                <span className="kpi">محاضرة: {lectureId ? "محددة" : "كل المادة"}</span>
-              </div>
+            <div className="mcqProgress">
+              <div className="mcqProgress__bar" style={{ width: `${Math.round(((idx + 1) / questions.length) * 100)}%` }} />
             </div>
 
-            <div className="divider" />
+            <h2 className="mcqQuestionText">{current.question_text}</h2>
 
-            <div className="muted" style={{ whiteSpace: "pre-wrap", fontSize: 16, lineHeight: 1.8 }}>
-              {current?.question_text}
-            </div>
-
-            <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-              {current?.choices?.map((c, ci) => {
-                const selected = answers[current.id] === ci;
+            <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+              {current.choices.map((c, ci) => {
+                const picked = selectedForCurrent === ci;
+                const revealedNow = isRevealedFor(current.id);
                 const isCorrect = ci === current.correct_index;
-                const revealedNow = current ? isRevealedFor(current.id) : false;
+                const isWrongPick = revealedNow && picked && !isCorrect;
 
-                const showMarks = revealedNow; // ✅ التدريب: بعد الاختيار، الامتحان: بعد submit
-                const cls = [
-                  "mcqOption",
-                  selected ? "mcqOption--selected" : "",
-                  showMarks && isCorrect ? "mcqOption--correct" : "",
-                  showMarks && selected && !isCorrect ? "mcqOption--wrong" : "",
-                ]
-                  .filter(Boolean)
-                  .join(" ");
+                const cls =
+                  "mcqOption " +
+                  (picked ? "mcqOption--selected " : "") +
+                  (revealedNow && isCorrect ? "mcqOption--correct " : "") +
+                  (isWrongPick ? "mcqOption--wrong " : "");
 
                 return (
                   <button key={ci} className={cls} onClick={() => choose(ci)} disabled={submitted}>
                     <span className="mcqOption__letter">{letterFromIndex(ci)}</span>
                     <span className="mcqOption__text">{c}</span>
+
+                    {revealedNow ? (
+                      isCorrect ? (
+                        <span className="mcqTag mcqTag--ok">Correct</span>
+                      ) : picked ? (
+                        <span className="mcqTag mcqTag--bad">Wrong</span>
+                      ) : null
+                    ) : null}
                   </button>
                 );
               })}
             </div>
 
-            {/* ✅ في التدريب: بعد ما يختار يظهر التفسير فوراً */}
-            {current && mode === "practice" && isRevealedFor(current.id) ? (
-              <div style={{ marginTop: 12 }} className="card card--soft">
-                <div className="rowTitle" style={{ fontWeight: 700 }}>
-                  {answers[current.id] === current.correct_index ? "✅ إجابة صحيحة" : "❌ إجابة خاطئة"}
-                </div>
-                {current.explanation ? (
-                  <p className="muted" style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
-                    {current.explanation}
-                  </p>
-                ) : (
-                  <p className="muted" style={{ marginTop: 8 }}>
-                    (لا يوجد تفسير)
-                  </p>
-                )}
+            {isRevealedFor(current.id) && current.explanation ? (
+              <div className="card" style={{ marginTop: 12 }}>
+                <div className="rowTitle">Explanation</div>
+                <p className="muted" style={{ marginTop: 6 }}>
+                  {current.explanation}
+                </p>
               </div>
             ) : null}
 
-            <div className="divider" />
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 14, justifyContent: "space-between" }}>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <button className="btn btn--ghost" onClick={() => setIdx((v) => Math.max(0, v - 1))} disabled={idx === 0}>
+                  السابق
+                </button>
+                <button
+                  className="btn btn--ghost"
+                  onClick={() => setIdx((v) => Math.min(questions.length - 1, v + 1))}
+                  disabled={idx >= questions.length - 1}
+                >
+                  التالي
+                </button>
+              </div>
 
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button className="btn btn--ghost" onClick={() => setIdx((p) => Math.max(0, p - 1))} disabled={idx === 0}>
-                السابق
-              </button>
-              <button
-                className="btn btn--ghost"
-                onClick={() => setIdx((p) => Math.min(questions.length - 1, p + 1))}
-                disabled={idx >= questions.length - 1}
-              >
-                التالي
-              </button>
-
-              <div style={{ flex: 1 }} />
-
-              <button className="btn" onClick={submit} disabled={submitted}>
-                {submitted ? "تم التسليم" : "تسليم"}
+              <button className="btn" onClick={submit} disabled={submitted || !questions.length}>
+                إرسال
               </button>
             </div>
           </div>

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import { supabase } from "@/lib/supabase";
-import { getMyProfile, isModerator, UserRole } from "@/lib/profile";
+import { getMyProfile, isModerator, type UserRole } from "@/lib/profile";
 
 type Course = {
   id: string;
@@ -28,7 +28,6 @@ export default function AdminLecturesEntryPage() {
     (async () => {
       setErr(null);
       setLoading(true);
-
       try {
         const profile = await getMyProfile();
         if (!mounted) return;
@@ -105,7 +104,15 @@ export default function AdminLecturesEntryPage() {
                       {c.code} — {c.name}
                       {c.semester ? <span className="muted"> • ترم {c.semester}</span> : null}
                     </div>
-                    <div className="muted" style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <div
+                      className="muted"
+                      style={{
+                        fontSize: 13,
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
                       {c.description ?? "—"}
                     </div>
                   </div>

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import AppShell from "@/components/AppShell";
 import { supabase } from "@/lib/supabase";
-import { getMyProfile, isModerator, UserRole } from "@/lib/profile";
+import { getMyProfile, isModerator, type UserRole } from "@/lib/profile";
 import { fmtDate } from "@/lib/utils";
 import { letterFromIndex } from "@/lib/mcqParse";
 
@@ -29,12 +29,7 @@ type QRow = {
 function isFkRestriction(err: any) {
   const code = String(err?.code ?? "");
   const msg = String(err?.message ?? "").toLowerCase();
-  return (
-    code === "23503" ||
-    msg.includes("foreign key") ||
-    msg.includes("violates foreign key") ||
-    msg.includes("constraint")
-  );
+  return code === "23503" || msg.includes("foreign key") || msg.includes("constraint");
 }
 
 function isMissingArchiveColumn(err: any) {
@@ -89,10 +84,7 @@ export default function AdminMcqQuestionsPage() {
 
   useEffect(() => {
     async function loadCourses() {
-      const { data } = await supabase
-        .from("courses")
-        .select("id, code, name")
-        .order("code", { ascending: true });
+      const { data } = await supabase.from("courses").select("id, code, name").order("code", { ascending: true });
       setCourses((data ?? []) as Course[]);
     }
     if (!loadingRole && canManage) loadCourses();
@@ -102,11 +94,13 @@ export default function AdminMcqQuestionsPage() {
     async function loadLectures() {
       setLectures([]);
       if (!courseId) return;
+
       const { data } = await supabase
         .from("lectures")
         .select("id, title, order_index")
         .eq("course_id", courseId)
         .order("order_index", { ascending: true });
+
       setLectures((data ?? []) as Lecture[]);
     }
     if (!loadingRole && canManage) loadLectures();
@@ -155,7 +149,7 @@ export default function AdminMcqQuestionsPage() {
         error = res2.error as any;
 
         if (!error) {
-          setErr("تنبيه: علشان تقدر «إخفاء بدل حذف» لازم تشغّل ملف migrate_mcq_archive.sql في Supabase.");
+          setErr("تنبيه: علشان تقدر «إخفاء بدل حذف» لازم تشغّل migrate_mcq_archive.sql في Supabase.");
         }
       }
 
@@ -206,6 +200,23 @@ export default function AdminMcqQuestionsPage() {
     setEditExplanation("");
   }
 
+  function setChoice(i: number, val: string) {
+    setEditChoices((prev) => prev.map((c, idx) => (idx === i ? val : c)));
+  }
+
+  function addChoice() {
+    setEditChoices((prev) => [...prev, ""]);
+  }
+
+  function removeChoice(i: number) {
+    setEditChoices((prev) => prev.filter((_, idx) => idx !== i));
+    setEditCorrect((c) => {
+      if (c === i) return 0;
+      if (c > i) return c - 1;
+      return c;
+    });
+  }
+
   async function saveEdit() {
     if (!editing) return;
 
@@ -236,7 +247,12 @@ export default function AdminMcqQuestionsPage() {
         .eq("id", editing.id);
 
       if (error) {
-        alert("فشل تعديل السؤال. تأكد إنك مشرف وإن الـ RLS مضبوط.");
+        const code = String((error as any)?.code ?? "");
+        const msg = String((error as any)?.message ?? "");
+        alert(
+          `فشل تعديل السؤال${code ? ` [${code}]` : ""}: ${msg || "تأكد إنك مشرف وإن الـ RLS مضبوط."}\n\n` +
+            "لو الرسالة فيها RLS/permission: افتح Supabase → Table Editor → profiles وخلي role = moderator/admin لنفس الحساب."
+        );
         return;
       }
 
@@ -261,10 +277,7 @@ export default function AdminMcqQuestionsPage() {
   }
 
   async function toggleArchive(r: QRow, next: boolean) {
-    const { error } = await supabase
-      .from("mcq_questions")
-      .update({ is_archived: next })
-      .eq("id", r.id);
+    const { error } = await supabase.from("mcq_questions").update({ is_archived: next }).eq("id", r.id);
 
     if (error) {
       if (isMissingArchiveColumn(error)) {
@@ -291,10 +304,7 @@ export default function AdminMcqQuestionsPage() {
 
     // FK restriction -> archive instead
     if (isFkRestriction(error)) {
-      const { error: archErr } = await supabase
-        .from("mcq_questions")
-        .update({ is_archived: true })
-        .eq("id", r.id);
+      const { error: archErr } = await supabase.from("mcq_questions").update({ is_archived: true }).eq("id", r.id);
 
       if (archErr) {
         if (isMissingArchiveColumn(archErr)) {
@@ -312,9 +322,9 @@ export default function AdminMcqQuestionsPage() {
       return;
     }
 
-    // permission / other
-    const msg = String(error?.message ?? "");
-    alert(msg ? `فشل حذف السؤال: ${msg}` : "فشل حذف السؤال. تأكد من الصلاحيات.");
+    const code = String((error as any)?.code ?? "");
+    const msg = String((error as any)?.message ?? "");
+    alert(`فشل حذف السؤال${code ? ` [${code}]` : ""}: ${msg || "تأكد من الصلاحيات."}`);
   }
 
   if (!canManage) {
@@ -376,12 +386,7 @@ export default function AdminMcqQuestionsPage() {
 
             <div className="col-12 col-4">
               <label className="label">المحاضرة</label>
-              <select
-                className="select"
-                value={lectureId}
-                onChange={(e) => setLectureId(e.target.value)}
-                disabled={!courseId}
-              >
+              <select className="select" value={lectureId} onChange={(e) => setLectureId(e.target.value)} disabled={!courseId}>
                 <option value="">الكل</option>
                 {lectures.map((l) => (
                   <option key={l.id} value={l.id}>
@@ -393,12 +398,7 @@ export default function AdminMcqQuestionsPage() {
 
             <div className="col-12 col-4">
               <label className="label">بحث في نص السؤال</label>
-              <input
-                className="input"
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="اكتب كلمة…"
-              />
+              <input className="input" value={q} onChange={(e) => setQ(e.target.value)} placeholder="اكتب كلمة…" />
             </div>
           </div>
 
@@ -520,99 +520,69 @@ export default function AdminMcqQuestionsPage() {
                   <button className="btn btn--ghost" onClick={closeEdit} disabled={saving}>
                     إغلاق
                   </button>
+                  <button className="btn" onClick={saveEdit} disabled={saving}>
+                    {saving ? "جاري الحفظ…" : "حفظ"}
+                  </button>
                 </div>
               </div>
 
-              <label className="label">نص السؤال</label>
-              <textarea
-                className="textarea"
-                rows={3}
-                value={editText}
-                onChange={(e) => setEditText(e.target.value)}
-                placeholder="اكتب السؤال…"
-              />
+              <div className="grid" style={{ marginTop: 12 }}>
+                <div className="col-12">
+                  <label className="label">نص السؤال</label>
+                  <textarea className="textarea" rows={3} value={editText} onChange={(e) => setEditText(e.target.value)} />
+                </div>
 
-              <div style={{ height: 10 }} />
-
-              <label className="label">الاختيارات</label>
-              <div style={{ display: "grid", gap: 8 }}>
-                {editChoices.map((c, i) => (
-                  <div key={i} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <span className="pill" style={{ minWidth: 42, textAlign: "center" }}>
-                      {letterFromIndex(i)}
-                    </span>
-                    <input
-                      className="input"
-                      value={c}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setEditChoices((p) => p.map((x, idx) => (idx === i ? v : x)));
-                      }}
-                      placeholder={`الاختيار ${letterFromIndex(i)}`}
-                    />
-                    <button
-                      className="btn btn--ghost"
-                      onClick={() => {
-                        setEditChoices((p) => p.filter((_, idx) => idx !== i));
-                        setEditCorrect((prev) => (prev === i ? 0 : prev > i ? prev - 1 : prev));
-                      }}
-                      disabled={saving || editChoices.length <= 2}
-                      title={editChoices.length <= 2 ? "لازم على الأقل اختيارين" : "حذف اختيار"}
-                    >
-                      ✕
+                <div className="col-12">
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                    <label className="label" style={{ margin: 0 }}>
+                      الاختيارات + الصح
+                    </label>
+                    <button className="btn btn--ghost" onClick={addChoice} disabled={saving}>
+                      + إضافة اختيار
                     </button>
                   </div>
-                ))}
-              </div>
 
-              <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
-                <button
-                  className="btn btn--ghost"
-                  onClick={() => setEditChoices((p) => [...p, ""])}
-                  disabled={saving || editChoices.length >= 6}
-                >
-                  + إضافة اختيار
-                </button>
+                  <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+                    {editChoices.map((c, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "26px 1fr auto",
+                          gap: 10,
+                          alignItems: "center",
+                        }}
+                      >
+                        <label className="pill" style={{ display: "flex", gap: 8, alignItems: "center", margin: 0 }}>
+                          <input type="radio" checked={editCorrect === i} onChange={() => setEditCorrect(i)} disabled={saving} />
+                          <span>{letterFromIndex(i)}</span>
+                        </label>
 
-                <div style={{ flex: 1 }} />
+                        <input className="input" value={c} onChange={(e) => setChoice(i, e.target.value)} disabled={saving} />
 
-                <div style={{ minWidth: 220 }}>
-                  <label className="label">الإجابة الصحيحة</label>
-                  <select
-                    className="select"
-                    value={String(editCorrect)}
-                    onChange={(e) => setEditCorrect(Number(e.target.value))}
-                    disabled={saving}
-                  >
-                    {editChoices.map((_, i) => (
-                      <option key={i} value={String(i)}>
-                        {letterFromIndex(i)}
-                      </option>
+                        <button className="btn btn--ghost" onClick={() => removeChoice(i)} disabled={saving || editChoices.length <= 2}>
+                          حذف
+                        </button>
+                      </div>
                     ))}
-                  </select>
+                  </div>
+
+                  <p className="muted" style={{ marginTop: 8 }}>
+                    * لازم يكون فيه على الأقل اختيارين.
+                  </p>
                 </div>
-              </div>
 
-              <div style={{ height: 10 }} />
-
-              <label className="label">شرح/تعليل (اختياري)</label>
-              <textarea
-                className="textarea"
-                rows={3}
-                value={editExplanation}
-                onChange={(e) => setEditExplanation(e.target.value)}
-                placeholder="لو حابب تكتب شرح…"
-              />
-
-              <div style={{ height: 14 }} />
-
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
-                <button className="btn btn--ghost" onClick={closeEdit} disabled={saving}>
-                  إلغاء
-                </button>
-                <button className="btn" onClick={saveEdit} disabled={saving}>
-                  {saving ? "جاري الحفظ…" : "حفظ التعديل"}
-                </button>
+                <div className="col-12">
+                  <label className="label">شرح (اختياري)</label>
+                  <textarea
+                    className="textarea"
+                    rows={3}
+                    value={editExplanation}
+                    onChange={(e) => setEditExplanation(e.target.value)}
+                    placeholder="لو عايز تشرح سبب الإجابة…"
+                    disabled={saving}
+                  />
+                </div>
               </div>
             </div>
           </div>
